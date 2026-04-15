@@ -68,11 +68,23 @@ def collect_loop_metadata(loop_root: ForLoop) -> dict[Index, tuple[int, int, int
 
     return loop_metadata
 
+def collect_loop_levels(loop_root: ForLoop) -> list[Index]:
+    """
+    Recursively collects indexes of all loops. To simplify the implementation
+    we assume that all loops are nested within each other.
+    """
+    loop_lvls = [loop_root.lvl]
+
+    for stmt in loop_root.body.bodies:
+        if isinstance(stmt, ForLoop):
+            loop_lvls.extend(collect_loop_levels(stmt))
+
+    return loop_lvls
 
 def construct_dependency_graph(
     loop_root: ForLoop,
     dependency_test: Callable[
-        [DependencyGraphNode, DependencyGraphNode, dict[Index, tuple[int, int, int]]],
+        [DependencyGraphNode, DependencyGraphNode, list[Index], dict[Index, tuple[int, int, int]]],
         DependencyGraphEdge | None,
     ],
 ) -> dict[DependencyGraphNode, set[DependencyGraphEdge]]:
@@ -86,13 +98,14 @@ def construct_dependency_graph(
 
     # Collect loop metadata
     loop_metadata = collect_loop_metadata(loop_root)
+    loop_lvls = collect_loop_levels(loop_root)
 
     # Update the dependency graph to include dependency edges
     # associated with the loop_root.
     dependency_nodes = list(dependency_graph.keys())
     for stmt1 in dependency_nodes:
         for stmt2 in dependency_nodes:
-            dependency_edges = dependency_test(stmt1, stmt2, loop_metadata)
+            dependency_edges = dependency_test(stmt1, stmt2, loop_lvls, loop_metadata)
             for edge in dependency_edges:
                 dependency_graph[edge.source].add(edge)
 

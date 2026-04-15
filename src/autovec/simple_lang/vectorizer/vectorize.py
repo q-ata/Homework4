@@ -3,24 +3,11 @@ from .dependency_graph import (
     DependencyGraphEdge,
     construct_dependency_graph,
     collect_loop_metadata,
+    collect_loop_levels
 )
 from .normalize import normalize
 from collections.abc import Callable
 from .. import nodes as smpl
-
-
-def collect_loop_levels(loop_root: smpl.ForLoop) -> list[smpl.Index]:
-    """
-    Recursively collects indexes of all loops. To simplify the implementation
-    we assume that all loops are nested within each other.
-    """
-    loop_lvls = [loop_root.lvl]
-
-    for stmt in loop_root.body.bodies:
-        if isinstance(stmt, smpl.ForLoop):
-            loop_lvls.extend(collect_loop_levels(stmt))
-
-    return loop_lvls
 
 
 def advanced_vectorization(

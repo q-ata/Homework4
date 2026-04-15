@@ -4,6 +4,7 @@ from .. import nodes as smpl
 def dependency_test(
     stmt1: DependencyGraphNode,
     stmt2: DependencyGraphNode,
+    loop_lvls: list[smpl.Index],
     loop_metadata: dict[smpl.Index, tuple[int, int, int]],
 ) -> tuple[DependencyGraphEdge, ...]:
     """
