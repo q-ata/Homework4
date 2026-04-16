@@ -145,6 +145,20 @@ from autovec.simple_lang.compiler import SimpleLang2CCompiler
             """,
             (np.full(shape=(16, 16), fill_value=0, dtype=np.float64),),
             np.array([[i] * 16 for i in range(0, 16)], dtype=np.float64),
+        ),
+        (
+            """
+            function prgm(A[16,16]) -> [16,16]:
+                for i in range(0,16,1)
+                    for j in range(0,16,1)
+                        A[i,j] = A[5,j] + 2
+                    end
+                end
+                return A
+            end
+            """,
+            (np.array([[i] * 16 for i in range(0, 16)], dtype=np.float64),),
+            np.array([[7 if i <= 5 else 9] * 16 for i in range(0, 16)], dtype=np.float64),
         )
     ],
 )

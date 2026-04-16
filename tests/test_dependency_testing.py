@@ -88,6 +88,43 @@ from autovec.simple_lang.parser import SimpleLangParser
             """,
             {"S1": [("S1", "i")]},
         ),
+        (
+            """
+            function ziv1(A[16], B[16]) -> [16]:
+                for i in range(0,16,1)
+                    A[0] = 1          # S1
+                    B[i] = A[0] + 2   # S2
+                end
+                return B
+            end
+            """,
+            {"S1": [("S2", "ziv")], "S2":[]},
+        ),
+        (
+            """
+            function weak_siv1(A[16], B[16]) -> [16]:
+                for i in range(0,16,1)
+                    A[i] = 1          # S1
+                    B[i] = A[5] + 2   # S2
+                end
+                return B
+            end
+            """,
+            {"S1": [("S2", "i")], "S2":[("S1", "i")]},
+        ),
+        (
+            """
+            function weak_siv2(A[16,16]) -> [16,16]:
+                for i in range(0,16,1)
+                    for j in range(0,16,1)
+                        A[i,j] = A[5,j] + 2     # S1
+                    end
+                end
+                return A
+            end
+            """,
+            {"S1": [("S1", "i")]},
+        )
     ],
 )
 def test_vectorize(input_prgm, expected_dependency_graph):

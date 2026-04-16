@@ -130,6 +130,47 @@ from autovec.simple_lang.parser import SimpleLangParser
             end
             """,
         ),
+        # Weak Zero SIV tests
+        (
+            """
+            function weak_siv1(A[16], B[16]) -> [16]:
+                for i in range(0,16,1)
+                    A[i] = 1
+                    B[i] = A[5] + 2
+                end
+                return B
+            end
+            """,
+            """
+            function weak_siv1(A[16], B[16]) -> [16]:
+                for i in range(0,16,1)
+                    A[i] = 1
+                    B[i] = A[5] + 2
+                end
+                return B
+            end
+            """
+        ),
+        (
+            """
+            function weak_siv2(A[16,16]) -> [16,16]:
+                for i in range(0,16,1)
+                    for j in range(0,16,1)
+                        A[i,j] = A[5,j] + 2
+                    end
+                end
+                return A
+            end
+            """,
+            """
+            function weak_siv2(A[16,16]) -> [16,16]:
+                for i in range(0,16,1)
+                    A[i,0:16] = A[5,0:16] + 2
+                end
+                return A
+            end
+            """
+        )
     ],
 )
 def test_vectorize(input_prgm, expected_output_prgm):
