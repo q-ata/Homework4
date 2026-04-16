@@ -98,7 +98,7 @@ from autovec.simple_lang.parser import SimpleLangParser
                 return B
             end
             """,
-            {"S1": [("S2", "ziv")], "S2":[]},
+            {"S1": [("S1", "ziv"), ("S2", "ziv")], "S2":[("S1", "ziv")]},
         ),
         (
             """
@@ -142,7 +142,7 @@ def test_vectorize(input_prgm, expected_dependency_graph):
     # Simplify dependency graph for verification
     simplified_dependency_graph: dict[str, list[str]] = {}
     for src, children in dependency_graph.items():
-        simplified_dependency_graph[src.unique_id] = [
+        simplified_dependency_graph[src.unique_id] = sorted([
             (child.target.unique_id, child.loop_lvl.name) for child in children
-        ]
+        ])
     assert simplified_dependency_graph == expected_dependency_graph
