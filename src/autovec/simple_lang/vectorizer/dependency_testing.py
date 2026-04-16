@@ -16,6 +16,7 @@ def dependency_test(
     Args:
         stmt1: Statement 1
         stmt2: Statement 2
+        loop_lvls: Loop levels ordered from outermost to innermost
         loop_metadata: Dictionary mapping loop indices to their (start, end, stride)
                       bounds. Can be used to determine if dependencies exist within loop ranges.
 
