@@ -2,6 +2,7 @@ from .dependency_graph import DependencyGraphNode, DependencyGraphEdge
 from .. import nodes as smpl
 import operator
 from ... import symbolic as sym
+import copy
 
 # returns None if no dependency could be found (when the constants don't match or ZIV is unapplicable)
 # Otherwise, returns the Index that carries the dep (N/A for ZIV) and the distance (default 0 for ZIV)
@@ -180,6 +181,30 @@ def dependency_test(
         return node
     rewrite = sym.PreWalk(rw2)
     rewrite(s2.stmt.value)
+
+    def get_missing_indexes_and_reorder(distances: list[tuple[smpl.Index, int]]):
+        missing = []
+        new_dists = []
+        idx = 0
+        for index in loop_lvls:
+            found = False
+            for (i, d) in distances:
+                if i == index:
+                    found = True
+                    new_dists.append((i, d))
+                    break
+            if not found:
+                new_dists.append((index, 0)) # tentative 0 dist just to fill the list
+                missing.append(idx)
+
+            idx += 1
+        return (new_dists, missing)
+
+    def is_entirely_ziv(distances: list[tuple[smpl.Index, int]]):
+        for (i, _) in distances:
+            if i.name != "ziv":
+                return False
+        return True
     
     def reorder_distances(distances: list[tuple[smpl.Index, int]], a_before_b) -> list[tuple[smpl.Index, int]]:
         is_ziv = True
@@ -237,10 +262,37 @@ def dependency_test(
         if s1.id != s2.id:
             pairs_to_check.append((s2.stmt.indices, s1.stmt.indices, False, s2, s1))
 
+    def find_index(i_list, to_check) -> int | None:
+        for (i, d) in i_list:
+            if i == to_check:
+                return d
+        return None
+    
+    def create_dist_vecs(i_list, prefix, start_from, accum):
+        if start_from >= len(loop_lvls):
+            # base case
+            accum.append(prefix)
+            return
+        index_to_check = loop_lvls[start_from]
+        res = find_index(i_list, index_to_check)
+        if res == None:
+            # index_to_check is not present in the indexes, can be anything
+            new_prefix1 = prefix + [(index_to_check, 1)]
+            new_prefix2 = prefix + [(index_to_check, 0)]
+            new_prefix3 = prefix + [(index_to_check, -1)]
+            create_dist_vecs(i_list, new_prefix1, start_from + 1, accum)
+            create_dist_vecs(i_list, new_prefix2, start_from + 1, accum)
+            create_dist_vecs(i_list, new_prefix3, start_from + 1, accum)
+        else:
+            new_prefix1 = prefix + [(index_to_check, res)]
+            new_prefix2 = prefix + [(index_to_check, 0)]
+            create_dist_vecs(i_list, new_prefix1, start_from + 1, accum)
+            create_dist_vecs(i_list, new_prefix2, start_from + 1, accum)
+
     # check for dep from a to b
     for (indices1, indices2, a_before_b, node_a, node_b) in pairs_to_check:
-        # print(f"index 1: {indices1}")
-        # print(f"index 2: {indices2}")
+        print(f"index 1: {indices1}")
+        print(f"index 2: {indices2}")
         # try to construct a plausible distance vector.
         # if the direction vector is all =, its only valid if the dependency is ziv or a_before_b is TRUE
         distances = []
@@ -267,31 +319,39 @@ def dependency_test(
         # there is potential for conflict in all the indices
         # reorder the indices into outer -> inner loop order
         # if the new distances is empty, the indices were entire ziv
-        distances = reorder_distances(distances, a_before_b)
-        # print(distances)
-        # if the distance vector is plausible AND a_before_b, a dependency exists
-        # if not a_before_b a dependency exists iff (the distance vector is plausible and non zero) or its empty, meaning ziv
-        
-        # new distances being empty means entirely ziv, and there is conflict
-        if len(distances) == 0:
+        if is_entirely_ziv(distances):
             deps.append(DependencyGraphEdge(ziv_index, node_a, node_b))
         else:
-            plausible = True
-            non_zero = False
-            carry = distances[-1][0]
-            for (idx, dist) in distances:
-                if dist < 0 and not non_zero:
-                    # the first non zero distance is negative, implausible
-                    plausible = False
-                    break
-                if dist > 0 and not non_zero:
-                    # still need to check loop bounds, cant break yet
-                    non_zero = True
-                    carry = idx
-                if dist != 0 and abs(dist) >= loop_metadata[idx][1]:
-                    # the distance exceeds loop bounds, implausible
-                    plausible = False
-                    break
-            if plausible and (a_before_b or non_zero):
-                deps.append(DependencyGraphEdge(carry, node_a, node_b))
+            # (distances, missing) = get_missing_indexes_and_reorder(distances)
+            # print(f"base distances: {distances}")
+            # the missing indexes can have any direction while still satisfying the conflict
+            # in the other indexes
+            dist_vecs = []
+            create_dist_vecs(distances, [], 0, dist_vecs)
+
+            print(dist_vecs)
+            print(loop_metadata)
+            # if the distance vector is plausible AND a_before_b, a dependency exists
+            # if not a_before_b a dependency exists iff (the distance vector is plausible and non zero) or its empty, meaning ziv
+            
+            for dist_vec in dist_vecs:
+                print(dist_vec)
+                plausible = True
+                non_zero = False
+                carry = dist_vec[-1][0]
+                for (idx, dist) in dist_vec:
+                    if dist < 0 and not non_zero:
+                        # the first non zero distance is negative, implausible
+                        plausible = False
+                        break
+                    if dist > 0 and not non_zero:
+                        # still need to check loop bounds, cant break yet
+                        non_zero = True
+                        carry = idx
+                    if dist != 0 and abs(dist) >= loop_metadata[idx][1]:
+                        # the distance exceeds loop bounds, implausible
+                        plausible = False
+                        break
+                if plausible and (a_before_b or non_zero):
+                    deps.append(DependencyGraphEdge(carry, node_a, node_b))
     return tuple(deps)
