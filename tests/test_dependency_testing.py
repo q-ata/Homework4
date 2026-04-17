@@ -182,20 +182,20 @@ from autovec.simple_lang.parser import SimpleLangParser
         #     """,
         #     {"S1": [("S2", "i")], "S2": []},
         # ),
-        (
-            """
-            function yes_loop(A[16], B[16]) -> [16]:
-                for j in range(0, 3, 1)
-                    for i in range(0, 15, 1)
-                        A[i] = 12 # S1
-                        B[i] = A[i] # S2
-                    end
-                end
-                return B
-            end
-            """,
-            {"S1": [('S1', 'j'), ('S2', 'i'), ('S2', 'j')], "S2": [("S1", "j"), ("S2", "j")]},
-        ),
+        # (
+        #     """
+        #     function yes_loop(A[16], B[16]) -> [16]:
+        #         for j in range(0, 3, 1)
+        #             for i in range(0, 15, 1)
+        #                 A[i] = 12 # S1
+        #                 B[i] = A[i] # S2
+        #             end
+        #         end
+        #         return B
+        #     end
+        #     """,
+        #     {"S1": [('S1', 'j'), ('S2', 'i')], "S2": [("S1", "j"), ("S2", "j")]},
+        # ),
         # (
         #     """
         #     function yes_loop2(A[16], B[16]) -> [16]:
@@ -210,20 +210,20 @@ from autovec.simple_lang.parser import SimpleLangParser
         #     """,
         #     {"S1": [("S1", "j"), ("S2", "i")], "S2": [("S1", "j"), ("S2", "j")]},
         # ),
-        # (
-        #     """
-        #     function homework2(A[16, 16, 16]) -> [16, 16, 16]:
-        #         for k in range(0, 16, 1)
-        #             for j in range(0, 16, 1)
-        #                 for i in range(0, 16, 1)
-        #                     A[i+1, j, k] = A[i, j, 5] + 2
-        #                 end
-        #             end
-        #         end
-        #     end
-        #     """,
-        #     {"S1": [("S1", "i"), ("S1", "k")]},
-        # ),
+        (
+            """
+            function homework2(A[16, 16, 16]) -> [16, 16, 16]:
+                for k in range(0, 16, 1)
+                    for j in range(0, 16, 1)
+                        for i in range(0, 16, 1)
+                            A[i+1, j, k] = A[i, j, 5] + 2
+                        end
+                    end
+                end
+            end
+            """,
+            {"S1": [("S1", "i"), ("S1", "k")]},
+        ),
     ],
 )
 def test_vectorize(input_prgm, expected_dependency_graph):

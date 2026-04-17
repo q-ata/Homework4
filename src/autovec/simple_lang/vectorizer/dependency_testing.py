@@ -3,6 +3,8 @@ from .. import nodes as smpl
 import operator
 from ... import symbolic as sym
 import copy
+import math
+from enum import Enum
 
 # returns None if no dependency could be found (when the constants don't match or ZIV is unapplicable)
 # Otherwise, returns the Index that carries the dep (N/A for ZIV) and the distance (default 0 for ZIV)
@@ -84,7 +86,21 @@ def get_siv_form(i):
         case _:
             return None
 
-def test_strong_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpression) -> tuple[smpl.Index, int] | None:
+class Direction(Enum):
+    LT = "<"
+    GT = ">"
+    EQ = "="
+    ALL = "*"
+
+    @staticmethod
+    def from_distance(dist: int):
+        if dist < 0:
+            return Direction.LT
+        if dist == 0:
+            return Direction.EQ
+        return Direction.GT
+
+def test_strong_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpression, loop_meta) -> list[tuple[smpl.Index, Direction]] | None:
     # check for correct form
     (i_, j_) = (get_siv_form(i), get_siv_form(j))
     if not i_ or not j_:
@@ -97,9 +113,12 @@ def test_strong_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpression) 
     dist = (i_addend - j_addend) / i_coeff
     if not dist.is_integer():
         return None
-    return (smpl.Index(i_name), int(dist))
+    upper_bound = loop_meta[smpl.Index(i_name)][1]
+    if abs(dist) < upper_bound:
+        return [(smpl.Index(i_name), Direction.from_distance(int(dist)))]
+    return None # exceeds loop bounds
 
-def test_weak_zero_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpression) -> tuple[smpl.Index, int] | None:
+def test_weak_zero_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpression, loop_meta) -> list[tuple[smpl.Index, Direction]] | None:
     i_ = get_siv_form(i)
     j_= get_siv_form(j)
     if (i_ == None and j_ == None) or (i_ != None and j_ != None):
@@ -123,13 +142,26 @@ def test_weak_zero_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpressio
         lit = get_literal_value(j)
     
     if strong_tuple == None or lit == None:
+        print("not applicable:")
+        print(i)
+        print(j)
         return None # weak zero not applicable: other index is not literal
     
     (name, coeff, offset) = strong_tuple
-    dist = (lit - offset) / coeff
-    if not dist.is_integer():
+    match_point = (lit - offset) / coeff
+    if not match_point.is_integer():
         return None
-    return (smpl.Index(name), int(dist))
+    
+    upper_bound = loop_meta[smpl.Index(name)][1]
+    if match_point < 0 or match_point >= upper_bound:
+        return None
+    possible = []
+    if match_point < upper_bound:
+        possible.append((smpl.Index(name), Direction.EQ))
+    if match_point < upper_bound - 1:
+        possible.append((smpl.Index(name), Direction.GT))
+    if match_point > 0:
+        possible.append((smpl.Index(name), Direction.LT))
     
 
 def dependency_test(
@@ -182,60 +214,6 @@ def dependency_test(
     rewrite = sym.PreWalk(rw2)
     rewrite(s2.stmt.value)
 
-    def get_missing_indexes_and_reorder(distances: list[tuple[smpl.Index, int]]):
-        missing = []
-        new_dists = []
-        idx = 0
-        for index in loop_lvls:
-            found = False
-            for (i, d) in distances:
-                if i == index:
-                    found = True
-                    new_dists.append((i, d))
-                    break
-            if not found:
-                new_dists.append((index, 0)) # tentative 0 dist just to fill the list
-                missing.append(idx)
-
-            idx += 1
-        return (new_dists, missing)
-
-    def is_entirely_ziv(distances: list[tuple[smpl.Index, int]]):
-        for (i, _) in distances:
-            if i.name != "ziv":
-                return False
-        return True
-    
-    def reorder_distances(distances: list[tuple[smpl.Index, int]], a_before_b) -> list[tuple[smpl.Index, int]]:
-        is_ziv = True
-        for (i, _) in distances:
-            if i.name != "ziv":
-                is_ziv = False
-                break
-        if is_ziv:
-            return []
-        new_dists = []
-        for level in loop_lvls:
-            found = False
-            for (i, dist) in distances:
-                if level == i:
-                    new_dists.append((i, dist))
-                    found = True
-                    break
-            if not found and not a_before_b:
-                # There is a loop whose index is not referenced.
-                # Artificially insert a "<" direction so the later code that
-                # checks plausibility will succeed.
-                new_dists.append((level, 1))
-        return new_dists
-    
-    ziv_index = smpl.Index("ziv")
-    
-    # Need to check for:
-    # RAW from s1 to s2
-    # RAW from s2 to s1
-    # WAR from s2 to s1
-    # WAR from s1 to s2
     pairs_to_check = []
     for load in loads2:
         if s1.stmt.buffer != load.buffer:
@@ -243,8 +221,8 @@ def dependency_test(
         # True means the second index's instruction comes lexically AFTER the first.
         # for self cycle, the write comes after the read
         # otherwise, s1 comes before s2 which means the load comes after
-        pairs_to_check.append((s1.stmt.indices, load.indices, s1.id != s2.id, s1, s2))
-        pairs_to_check.append((load.indices, s1.stmt.indices, s1.id == s2.id, s2, s1))
+        pairs_to_check.append((s1.stmt.indices, load.indices, s1, s2))
+        pairs_to_check.append((load.indices, s1.stmt.indices, s2, s1))
     
     # self cycles were already covered by the first loop's appends
     if s1.id != s2.id:
@@ -252,106 +230,72 @@ def dependency_test(
             if s2.stmt.buffer != load.buffer:
                 continue
             # guaranteed s2 store comes lexically after the load
-            pairs_to_check.append((s2.stmt.indices, load.indices, False, s2, s1))
+            pairs_to_check.append((s2.stmt.indices, load.indices, s2, s1))
             # check for WAR from s1 to s2, s1 comes lexically before
-            pairs_to_check.append((load.indices, s2.stmt.indices, True, s1, s2))
+            pairs_to_check.append((load.indices, s2.stmt.indices, s1, s2))
 
     # WAW
     if s1.stmt.buffer == s2.stmt.buffer:
-        pairs_to_check.append((s1.stmt.indices, s2.stmt.indices, s1.id != s2.id, s1, s2))
+        pairs_to_check.append((s1.stmt.indices, s2.stmt.indices, s1, s2))
         if s1.id != s2.id:
-            pairs_to_check.append((s2.stmt.indices, s1.stmt.indices, False, s2, s1))
+            pairs_to_check.append((s2.stmt.indices, s1.stmt.indices, s2, s1))
 
-    def find_index(i_list, to_check) -> int | None:
-        for (i, d) in i_list:
-            if i == to_check:
-                return d
-        return None
-    
-    def create_dist_vecs(i_list, prefix, start_from, accum):
-        if start_from >= len(loop_lvls):
-            # base case
-            accum.append(prefix)
-            return
-        index_to_check = loop_lvls[start_from]
-        res = find_index(i_list, index_to_check)
-        if res == None:
-            # index_to_check is not present in the indexes, can be anything
-            new_prefix1 = prefix + [(index_to_check, 1)]
-            new_prefix2 = prefix + [(index_to_check, 0)]
-            new_prefix3 = prefix + [(index_to_check, -1)]
-            create_dist_vecs(i_list, new_prefix1, start_from + 1, accum)
-            create_dist_vecs(i_list, new_prefix2, start_from + 1, accum)
-            create_dist_vecs(i_list, new_prefix3, start_from + 1, accum)
-        else:
-            new_prefix1 = prefix + [(index_to_check, res)]
-            new_prefix2 = prefix + [(index_to_check, 0)]
-            create_dist_vecs(i_list, new_prefix1, start_from + 1, accum)
-            create_dist_vecs(i_list, new_prefix2, start_from + 1, accum)
+    index_to_pos = {}
+    counter = 0
+    for i in loop_lvls:
+        index_to_pos[i] = counter
+        counter += 1
 
-    # check for dep from a to b
-    for (indices1, indices2, a_before_b, node_a, node_b) in pairs_to_check:
-        print(f"index 1: {indices1}")
-        print(f"index 2: {indices2}")
-        # try to construct a plausible distance vector.
-        # if the direction vector is all =, its only valid if the dependency is ziv or a_before_b is TRUE
-        distances = []
-        found_dep = True
-        for (index1, index2) in zip(indices1, indices2):
+    def merge_vector_sets(dirs, cur_vecs):
+        new_vecs = []
+        for (index, dir) in dirs:
+            for vec in cur_vecs:
+                vec_copy = copy.deepcopy(vec)
+                vec_copy[index_to_pos[index]] = dir
+                new_vecs.append(vec_copy)
+        return new_vecs
+
+    def test_dependence(indices1: list[smpl.SimpleLangExpression], indices2: list[smpl.SimpleLangExpression], node_a, node_b):
+        subscripts = [*zip(indices1, indices2)]
+        # special case: all indices are ziv
+        is_ziv = True
+        for (index1, index2) in subscripts:
+            # test_separable
+            maybe_dep = test_ziv(index1, index2)
+            if maybe_dep == None:
+                is_ziv = False
+                break
+        if is_ziv:
+            return [DependencyGraphEdge(smpl.Index("ziv"), node_a, node_b)]
+        
+        # exactly the same but not ziv
+        # if indices1 == indices2:
+        #     return []
+        
+        vecs = [[Direction.ALL] * len(loop_lvls)]
+        for (index1, index2) in subscripts:
+            # test_separable()
             maybe_dep = test_ziv(index1, index2)
             if maybe_dep:
-                distances.append(maybe_dep)
+                continue # ignore ziv
+            maybe_dep = test_strong_siv(index1, index2, loop_metadata)
+            # print(f"siv: {maybe_dep}")
+            if maybe_dep != None:
+                vecs = merge_vector_sets(maybe_dep, vecs)
             else:
-                maybe_dep = test_strong_siv(index1, index2)
-                if maybe_dep:
-                    distances.append(maybe_dep)
+                maybe_dep = test_weak_zero_siv(index1, index2, loop_metadata)
+                if maybe_dep != None:
+                    vecs = merge_vector_sets(maybe_dep, vecs)
                 else:
-                    maybe_dep = test_weak_zero_siv(index1, index2)
-                    if maybe_dep:
-                        distances.append(maybe_dep)
-                    else:
-                        # couldn't find a conflict with all tests, assume no dependency
-                        found_dep = False
-                        break
-        if not found_dep:
-            continue
-
-        # there is potential for conflict in all the indices
-        # reorder the indices into outer -> inner loop order
-        # if the new distances is empty, the indices were entire ziv
-        if is_entirely_ziv(distances):
-            deps.append(DependencyGraphEdge(ziv_index, node_a, node_b))
-        else:
-            # (distances, missing) = get_missing_indexes_and_reorder(distances)
-            # print(f"base distances: {distances}")
-            # the missing indexes can have any direction while still satisfying the conflict
-            # in the other indexes
-            dist_vecs = []
-            create_dist_vecs(distances, [], 0, dist_vecs)
-
-            print(dist_vecs)
-            print(loop_metadata)
-            # if the distance vector is plausible AND a_before_b, a dependency exists
-            # if not a_before_b a dependency exists iff (the distance vector is plausible and non zero) or its empty, meaning ziv
+                    # no dependency, indices can't conflict
+                    return []
+            print(f"updated vecs: {vecs}")
+        return vecs
             
-            for dist_vec in dist_vecs:
-                print(dist_vec)
-                plausible = True
-                non_zero = False
-                carry = dist_vec[-1][0]
-                for (idx, dist) in dist_vec:
-                    if dist < 0 and not non_zero:
-                        # the first non zero distance is negative, implausible
-                        plausible = False
-                        break
-                    if dist > 0 and not non_zero:
-                        # still need to check loop bounds, cant break yet
-                        non_zero = True
-                        carry = idx
-                    if dist != 0 and abs(dist) >= loop_metadata[idx][1]:
-                        # the distance exceeds loop bounds, implausible
-                        plausible = False
-                        break
-                if plausible and (a_before_b or non_zero):
-                    deps.append(DependencyGraphEdge(carry, node_a, node_b))
-    return tuple(deps)
+
+    for (indices1, indices2, node_a, node_b) in pairs_to_check:
+        print(f"indices1: {indices1}")
+        print(f"indices2: {indices2}")
+        vecs = test_dependence(indices1, indices2, node_a, node_b)
+        print(f"vecs: {vecs}")
+    return ()
