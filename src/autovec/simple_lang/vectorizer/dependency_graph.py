@@ -61,7 +61,7 @@ def collect_loop_metadata(loop_root: ForLoop) -> dict[Index, tuple[int, int, int
     """
     loop_metadata: dict[Index, tuple[int, int, int]] = {}
 
-    loop_metadata[loop_root.lvl] = (loop_root.start, loop_root.end, loop_root.stride)
+    loop_metadata[loop_root.lvl] = (loop_root.start.val, loop_root.end.val, loop_root.stride.val)
     for stmt in loop_root.body.bodies:
         if isinstance(stmt, ForLoop):
             loop_metadata.update(collect_loop_metadata(stmt))

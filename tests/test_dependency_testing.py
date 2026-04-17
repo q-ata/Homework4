@@ -124,7 +124,106 @@ from autovec.simple_lang.parser import SimpleLangParser
             end
             """,
             {"S1": [("S1", "i")]},
-        )
+        ),
+        # my additional tests
+        (
+            """
+            function exceed_loop_bounds(A[16]) -> [16]:
+                for i in range(0,5,1)
+                    A[i+5] = A[i] + 12  # S1
+                end
+                return A
+            end
+            """,
+            {"S1": []},
+        ),
+        (
+            """
+            function unnormalized(A[16]) -> [16]:
+                for i in range(1, 16, 1)
+                    A[i] = A[i-1] + 12  # S1
+                end
+                return A
+            end
+            """,
+            {"S1": [("S1", "i")]},
+        ),
+        (
+            """
+            function negative(A[16]) -> [16]:
+                for i in range(0, 16, 1)
+                    A[15-i] = A[i] + 12  # S1
+                end
+                return A
+            end
+            """,
+            {"S1": []},
+        ),
+        (
+            """
+            function negative2(A[17]) -> [17]:
+                for i in range(0, 16, 1)
+                    A[16-i] = A[8] + 12  # S1
+                end
+                return A
+            end
+            """,
+            {"S1": [("S1", "i")]},
+        ),
+        (
+            """
+            function no_loop(A[16], B[16]) -> [16]:
+                for i in range(0, 15, 1)
+                    A[i] = 12 # S1
+                    B[i] = A[i] # S2
+                end
+                return B
+            end
+            """,
+            {"S1": [("S2", "i")], "S2": []},
+        ),
+        (
+            """
+            function yes_loop(A[16], B[16]) -> [16]:
+                for j in range(0, 3, 1)
+                    for i in range(0, 15, 1)
+                        A[i] = 12 # S1
+                        B[i] = A[i] # S2
+                    end
+                end
+                return B
+            end
+            """,
+            {"S1": [("S1", "j"), ("S2", "i")], "S2": [("S1", "j"), ("S2", "j")]},
+        ),
+        (
+            """
+            function yes_loop2(A[16], B[16]) -> [16]:
+                for i in range(0, 15, 1)
+                    for j in range(0, 3, 1)
+                        A[i] = 12 # S1
+                        B[i] = A[i] # S2
+                    end
+                end
+                return B
+            end
+            """,
+            {"S1": [("S1", "j"), ("S2", "i")], "S2": [("S1", "j"), ("S2", "j")]},
+        ),
+        (
+            """
+            function homework2(A[16, 16, 16]) -> [16, 16, 16]:
+                for k in range(0, 16, 1)
+                    for j in range(0, 16, 1)
+                        for i in range(0, 16, 1)
+                            A[i+1, j, k] = A[i, j, 5] + 2
+                        end
+                    end
+                end
+            end
+            """,
+            {"S1": [("S1", "i"), ("S1", "k"), ("S1", "k")]},
+        ),
     ],
 )
 def test_vectorize(input_prgm, expected_dependency_graph):
