@@ -18,7 +18,16 @@ def rw_simplify(expr: smpl.SimpleLangNode) -> smpl.SimpleLangNode:
             return smpl.Call(smpl.Literal(op.add), (a, smpl.Call(smpl.Literal(op.add), (b, c))))
         case smpl.Call(smpl.Literal(op.sub), (a, b)):
             return smpl.Call(smpl.Literal(op.add), (a, smpl.Call(smpl.Literal(op.mul), (smpl.Literal(-1), b))))
-        
+        case smpl.Call(smpl.Literal(op.mul), (smpl.Call(smpl.Literal(op.add), (a, b)), c)):
+            return smpl.Call(smpl.Literal(op.add), (
+                smpl.Call(smpl.Literal(op.mul), (a, c)), smpl.Call(smpl.Literal(op.mul), (b, c))
+            ))
+        case smpl.Call(smpl.Literal(op.mul), (a, smpl.Call(smpl.Literal(op.add), (b, c)))):
+            return smpl.Call(smpl.Literal(op.add), (
+                smpl.Call(smpl.Literal(op.mul), (a, b)), smpl.Call(smpl.Literal(op.mul), (a, c))
+            ))
+        case smpl.Call(smpl.Literal(op.mul), (smpl.Call(smpl.Literal(op.mul), (a, b)), c)):
+            return smpl.Call(smpl.Literal(op.mul), (a, smpl.Call(smpl.Literal(op.mul), (b, c))))
         
         # case smpl.Call(smpl.Literal(op.mul), (smpl.Literal(a), smpl.Literal(b))) if isinstance(a, int) and isinstance(b, int):
         #     return smpl.Literal(a*b)
