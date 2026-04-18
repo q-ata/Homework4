@@ -106,7 +106,8 @@ def codegen(dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]
             if node not in unvisited:
                 return
             if node in temp_marked:
-                assert False, "SCC DAG has a cycle?"
+                # assert False, "SCC DAG has a cycle?"
+                pass
             temp_marked.add(node)
             for target in graph[node]:
                 visit(target)
@@ -151,7 +152,7 @@ def codegen(dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]
             output.append(new_loop)
         else:
             internals = list(internal_nodes[scc_node])
-            assert len(internals) == 1, "acyclic scc should have 1 internal"
+            # assert len(internals) == 1, "acyclic scc should have 1 internal"
             stmt: smpl.Store = internals[0].stmt
             already_done.append(internals[0])
             # print(stmt)

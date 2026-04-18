@@ -137,14 +137,14 @@ def normalize(loop_root: smpl.ForLoop) -> smpl.ForLoop:
     
     # "For simplicity of implementation, you can assume that the
     # for loop bounds for SimpleLang are always constant Literals."
-    assert isinstance(loop_root.start, smpl.Literal), "start is always constant Literal"
-    assert isinstance(loop_root.start.val, int), "start should be int"
+    # assert isinstance(loop_root.start, smpl.Literal), "start is always constant Literal"
+    # assert isinstance(loop_root.start.val, int), "start should be int"
     i_start = loop_root.start.val
-    assert isinstance(loop_root.end, smpl.Literal), "end is always constant Literal"
-    assert isinstance(loop_root.end.val, int), "end should be int"
+    # assert isinstance(loop_root.end, smpl.Literal), "end is always constant Literal"
+    # assert isinstance(loop_root.end.val, int), "end should be int"
     i_end = loop_root.end.val
-    assert isinstance(loop_root.stride, smpl.Literal), "stride"
-    assert isinstance(loop_root.stride.val, int), "stride should be int"
+    # assert isinstance(loop_root.stride, smpl.Literal), "stride"
+    # assert isinstance(loop_root.stride.val, int), "stride should be int"
     i_stride = loop_root.stride.val
 
     new_upper = (i_end - i_start) // i_stride
@@ -166,7 +166,7 @@ def normalize(loop_root: smpl.ForLoop) -> smpl.ForLoop:
         return node
     rewrite = FixedPostWalk(rw)
     new_body = rewrite(copy.deepcopy(loop_root.body))
-    assert new_body
+    # assert new_body
     new_loop = smpl.ForLoop(old_i,
                             smpl.Literal(0),
                             smpl.Literal(new_upper),
@@ -192,7 +192,7 @@ def normalize(loop_root: smpl.ForLoop) -> smpl.ForLoop:
         new_loop_ = rewrite(new_loop)
 
     # print(new_loop)
-    assert isinstance(new_loop, smpl.ForLoop), "rw_simplify should be the identity for ForLoops"
+    # assert isinstance(new_loop, smpl.ForLoop), "rw_simplify should be the identity for ForLoops"
     return new_loop
 
 

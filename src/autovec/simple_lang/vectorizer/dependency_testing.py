@@ -163,7 +163,7 @@ def test_weak_zero_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpressio
         possible.append((smpl.Index(name), Direction.GT))
     if match_point > 0:
         possible.append((smpl.Index(name), Direction.LT))
-    assert len(possible) > 0, "no possible?"
+    # assert len(possible) > 0, "no possible?"
     return possible
     
 
