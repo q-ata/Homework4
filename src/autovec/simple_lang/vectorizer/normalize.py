@@ -1,3 +1,5 @@
+from typing import TypeVar
+
 from .. import nodes as smpl
 from ... import symbolic as sym
 import copy
@@ -12,6 +14,28 @@ def rw_simplify(expr: smpl.SimpleLangNode) -> smpl.SimpleLangNode:
             return smpl.Literal(a - b)
         case smpl.Call(smpl.Literal(op.mul), (smpl.Literal(a), smpl.Literal(b))) if isinstance(a, int) and isinstance(b, int):
             return smpl.Literal(a * b)
+        case smpl.Call(smpl.Literal(op.add), (smpl.Call(smpl.Literal(op.add), (a, b)), c)):
+            return smpl.Call(smpl.Literal(op.add), (a, smpl.Call(smpl.Literal(op.add), (b, c))))
+        case smpl.Call(smpl.Literal(op.sub), (a, b)):
+            return smpl.Call(smpl.Literal(op.add), (a, smpl.Call(smpl.Literal(op.mul), (smpl.Literal(-1), b))))
+        
+        
+        # case smpl.Call(smpl.Literal(op.mul), (smpl.Literal(a), smpl.Literal(b))) if isinstance(a, int) and isinstance(b, int):
+        #     return smpl.Literal(a*b)
+        case _:
+            return expr
+
+def rw_simplify2(expr):
+    match expr:
+        case smpl.Call(smpl.Literal(op.add), (smpl.Literal(a), b)) if isinstance(a, int) and a < 0:
+            return smpl.Call(smpl.Literal(op.sub), (b, smpl.Literal(-a)))
+        case smpl.Call(smpl.Literal(op.add), (a, smpl.Literal(b))) if isinstance(b, int) and b < 0:
+            return smpl.Call(smpl.Literal(op.sub), (a, smpl.Literal(-b)))
+        case _:
+            return expr
+        
+def rw_simplify3(expr):
+    match expr:
         # check for identities (a + 0 etc)
         case smpl.Call(smpl.Literal(op.add), (a, smpl.Literal(0))):
             return a
@@ -25,6 +49,77 @@ def rw_simplify(expr: smpl.SimpleLangNode) -> smpl.SimpleLangNode:
             return a
         case _:
             return expr
+
+def default_rewrite(x, y):
+    return x if x is not None else y
+
+class FixedPostWalk:
+    """
+    A rewriter which recursively rewrites the arguments of each node using
+    `rw`, then rewrites the resulting node. If all rewriters return `nothing`,
+    returns `nothing`.
+
+    Attributes:
+        rw (RwCallable): The rewriter function to apply.
+    """
+
+    def __init__(self, rw):
+        self.rw = rw
+
+    def __call__(self, x):
+        if isinstance(x, smpl.TermTree):
+            args = x.children
+            new_args = list(map(self, args))
+            if all(arg is None for arg in new_args):
+                return self.rw(x)
+            y = None
+            if x.head() == smpl.Store:
+                args = [*map(lambda x1, x2: default_rewrite(x1, x2), new_args, args)]
+                y = smpl.Store(buffer=args[0], value=args[-1], indices=tuple(args[1:-1]))
+            else:
+                y = x.make_term(
+                    x.head(), *map(lambda x1, x2: default_rewrite(x1, x2), new_args, args)
+                )
+            return default_rewrite(self.rw(y), y)  # type: ignore[return-value]
+        return self.rw(x)
+
+class FixedPreWalk:
+    """
+    A rewriter which recursively rewrites each node using `rw`, then rewrites
+    the arguments of the resulting node. If all rewriters return `nothing`,
+    returns `nothing`.
+
+    Attributes:
+        rw (RwCallable): The rewriter function to apply.
+    """
+
+    def __init__(self, rw):
+        self.rw = rw
+
+    def __call__(self, x):
+        y = self.rw(x)
+        if y is not None:
+            if isinstance(y, smpl.TermTree):
+                args = y.children
+                if y.head() == smpl.Store:
+                    store_args = [default_rewrite(self(arg), arg) for arg in args]
+                    return smpl.Store(buffer=store_args[0], value=store_args[-1], indices=tuple(store_args[1:-1]))
+                return y.make_term(  # type: ignore[return-value]
+                    y.head(), *[default_rewrite(self(arg), arg) for arg in args]
+                )
+            return y
+        if isinstance(x, smpl.TermTree):
+            args = x.children
+            new_args = list(map(self, args))
+            if not all(arg is None for arg in new_args):
+                if x.head() == smpl.Store:
+                    store_args = [*map(lambda x1, x2: default_rewrite(x1, x2), new_args, args)]
+                    return smpl.Store(buffer=store_args[0], value=store_args[-1], indices=tuple(store_args[1:-1]))
+                return x.make_term(  # type: ignore[return-value]
+                    x.head(),
+                    *map(lambda x1, x2: default_rewrite(x1, x2), new_args, args),
+                )
+        return None
 
 def normalize(loop_root: smpl.ForLoop) -> smpl.ForLoop:
     """
@@ -69,7 +164,7 @@ def normalize(loop_root: smpl.ForLoop) -> smpl.ForLoop:
             # recurse
             return normalize(node)
         return node
-    rewrite = sym.PostWalk(rw)
+    rewrite = FixedPostWalk(rw)
     new_body = rewrite(copy.deepcopy(loop_root.body))
     assert new_body
     new_loop = smpl.ForLoop(old_i,
@@ -77,47 +172,34 @@ def normalize(loop_root: smpl.ForLoop) -> smpl.ForLoop:
                             smpl.Literal(new_upper),
                             smpl.Literal(1),
                             new_body)
-    rewrite = sym.PreWalk(rw_simplify)
-    new_loop = rewrite(new_loop)
+    
+    rewrite = FixedPostWalk(rw_simplify)
+    new_loop_ = rewrite(new_loop)
+    while new_loop_ != new_loop:
+        new_loop = new_loop_
+        new_loop_ = rewrite(new_loop)
+
+    rewrite = FixedPostWalk(rw_simplify2)
+    new_loop_ = rewrite(new_loop)
+    while new_loop_ != new_loop:
+        new_loop = new_loop_
+        new_loop_ = rewrite(new_loop)
+
+    rewrite = FixedPostWalk(rw_simplify3)
+    new_loop_ = rewrite(new_loop)
+    while new_loop_ != new_loop:
+        new_loop = new_loop_
+        new_loop_ = rewrite(new_loop)
+
+    # print(new_loop)
     assert isinstance(new_loop, smpl.ForLoop), "rw_simplify should be the identity for ForLoops"
     return new_loop
 
-# Returns a new block with recursively normalized loop bounds
-def recursive_normalize(nodes: list[smpl.SimpleLangNode],
-                        old_i: smpl.Index,
-                        new_i: smpl.SimpleLangExpression) -> list[smpl.SimpleLangNode]:
-    new_nodes = []
-    for stmt in nodes:
-        match stmt:
-            case smpl.ForLoop(_):
-                new_loop = normalize(stmt)
-                new_loop = recursive_normalize(new_loop.body.children, old_i, new_i)
-                new_nodes.append(new_loop)
-            case smpl.Block(_):
-                new_body = recursive_normalize(stmt.children, old_i, new_i)
-                new_nodes.append(smpl.Block.from_children(new_body))
-            case smpl.Index(_):
-                if stmt == old_i:
-                    new_nodes.append(new_i)
-                else:
-                    new_nodes.append(stmt)
-            case smpl.Call(op, args):
-                new_args = recursive_normalize([*args], old_i, new_i)
-                new_nodes.append(smpl.Call.from_children(op, new_args))
-            case smpl.Load(buffer, indices):
-                new_indices = recursive_normalize([*indices], old_i, new_i)
-                new_nodes.append(smpl.Load.from_children(buffer, new_indices))
-            case smpl.Store(buffer, indices, value):
-                new_indices = recursive_normalize([*indices], old_i, new_i)
-                new_value = recursive_normalize([value], old_i, new_i)[0]
-                new_nodes.append(smpl.Store.from_children(buffer, new_indices, value=new_value))
-            case smpl.Return(arg):
-                new_arg = recursive_normalize([arg], old_i, new_i)[0]
-                new_nodes.append(smpl.Return.from_children(new_arg))
-            case smpl.Function(_):
-                assert False, "Nested function definition"
-            case _:
-                # Remaining node types may not contain a smpl.Index
-                new_nodes.append(stmt)
-    assert len(nodes) == len(new_nodes)
-    return new_nodes
+
+
+
+# indices=(Call(op=Literal(val=_operator.add),
+# args=(Call(op=Literal(val=_operator.mul),
+# args=(Index(name='i'),
+# Literal(val=1))),
+# Literal(val=1))),)

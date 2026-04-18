@@ -378,7 +378,7 @@ class SimpleLangPrinterContext(Context):
                 return f"load({self(buf)}, {', '.join(self(idx) for idx in idxs)})"
             case Store(buf, idxs, val):
                 self.exec(
-                    f"{feed}store({self(buf)}, {', '.join(self(idx) for idx in idxs)})"
+                    f"{feed}store({self(buf)}, {', '.join(self(idx) for idx in idxs)}, {self(val)})"
                 )
                 return None
             case Block(bodies):
@@ -422,13 +422,17 @@ class SimpleLangPrinterContext(Context):
             case Return(value):
                 self.exec(f"{feed}return {self(value)}")
                 return None
-            case Module(funcs):
-                for func in funcs:
-                    if not isinstance(func, Function):
-                        raise NotImplementedError(
-                            f"Unrecognized function type: {type(func)}"
-                        )
-                    self(func)
-                return None
+            case Index(name):
+                return name
+            case VectorIndex(start, end, stride):
+                return f"{start}:{end}:{stride}"
+            # case Module(funcs):
+            #     for func in funcs:
+            #         if not isinstance(func, Function):
+            #             raise NotImplementedError(
+            #                 f"Unrecognized function type: {type(func)}"
+            #             )
+            #         self(func)
+            #     return None
             case _:
                 raise NotImplementedError

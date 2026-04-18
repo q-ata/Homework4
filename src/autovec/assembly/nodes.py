@@ -455,7 +455,7 @@ class AssemblyPrinterContext(Context):
                 return f"load({self(buf)}, {', '.join(self(idx) for idx in idxs)})"
             case Store(buf, idxs, val):
                 self.exec(
-                    f"{feed}store({self(buf)}, {', '.join(self(idx) for idx in idxs)})"
+                    f"{feed}store({self(buf)}, {', '.join(self(idx) for idx in idxs)}, {self(val)})"
                 )
                 return None
             case Block(bodies):

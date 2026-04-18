@@ -10,14 +10,16 @@ from collections.abc import Callable
 from .. import nodes as smpl
 from dataclasses import dataclass
 import copy
+from .dependency_testing import get_siv_form
+from ... import symbolic as sym
 
-@dataclass(eq=True)
+@dataclass(eq=True, frozen=True)
 class SccNode:
-    def __init__(self, id):
-        self.id = id
-        self.order = -1
+    id: int
 
 def codegen(dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]], loop_lvls: list[smpl.Index], loop_metadata: dict[smpl.Index, tuple[int, int, int]], depth: int) -> list[smpl.SimpleLangNode]:
+    # if depth >= len(loop_lvls):
+    #     return []
     def tarjans(graph: dict[DependencyGraphNode, set[DependencyGraphEdge]]):
             indexes = {}
             low_link = {}
@@ -58,6 +60,13 @@ def codegen(dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]
             return sccs
         
     sccs: list[set[DependencyGraphNode]] = tarjans(dependency_graph)
+    def get_min_id(node_set: set[DependencyGraphNode]) -> int:
+        node_list = list(node_set)
+        min_id = node_list[0].id
+        for node in node_list[1:]:
+            min_id = min(min_id, node.id)
+        return min_id
+    sccs.sort(key=get_min_id)
     scc_graph: dict[SccNode, list[SccNode]] = {}
     internal_nodes: dict[SccNode, set[DependencyGraphNode]] = {}
     base_to_scc: dict[DependencyGraphNode, SccNode] = {}
@@ -73,23 +82,24 @@ def codegen(dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]
             base_to_scc[base] = scc_node
             internal_nodes[scc_node].add(base)
         if len(group) == 1:
-            # tentative, can be adjusted to false later as a result of self cycles
-            is_cyclic[scc_node] = True
-        else:
+            # tentative, can be adjusted to true later as a result of self cycles
             is_cyclic[scc_node] = False
+        else:
+            is_cyclic[scc_node] = True
 
     for scc_node, internals in internal_nodes.items():
         for internal in internals:
             for target in dependency_graph[internal]:
                 scc_target = base_to_scc[target.target]
                 if scc_target == scc_node:
-                    is_cyclic[scc_node] = False
+                    is_cyclic[scc_node] = True # self cycle, guaranteed cyclic
                 else:
                     scc_graph[scc_node].append(scc_target)
 
     def topo_sort(graph: dict[SccNode, list[SccNode]]) -> list[SccNode]:
         output: list[SccNode] = []
-        unvisited: set[SccNode] = set(graph.keys())
+        unvisited: list[SccNode] = list(graph.keys())
+        unvisited.sort(key=lambda node: -node.id)
         temp_marked: set[SccNode] = set()
         def visit(node):
             nonlocal output
@@ -102,14 +112,30 @@ def codegen(dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]
                 visit(target)
             unvisited.remove(node)
             output = [node] + output
+        
         while len(unvisited) > 0:
-            element = next(iter(unvisited))
+            element = unvisited[0]
+            # print(element)
             visit(element)
         return output
     
+    # returns the index in the indices list for where the specified smpl.Index occurs
+    # also gives the coefficient and addend for that expreesion.
+    # returns None if the supplied smpl.Index does not occur in the indices list
+    def find_index_mention(indices: list[smpl.SimpleLangExpression], to_find: smpl.Index) -> tuple[int, int, int] | None:
+        for i in range(len(indices)):
+            idx = indices[i]
+            siv = get_siv_form(idx)
+            # print(f"  {siv}, checking against {to_find.name}")
+            if siv != None and siv[0] == to_find.name:
+                return (i, siv[1], siv[2])
+        return None
+    
     components = topo_sort(scc_graph)
+    already_done = []
     output = []
     for scc_node in components:
+        # print(internal_nodes[scc_node])
         if is_cyclic[scc_node]:
             graph_copy = copy.deepcopy(dependency_graph)
             index_to_remove = loop_lvls[depth]
@@ -117,6 +143,8 @@ def codegen(dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]
                 for edge in edges:
                     if edge.loop_lvl == index_to_remove:
                         graph_copy[node].remove(edge)
+            for k in already_done:
+                del graph_copy[k]
             loop_body = codegen(graph_copy, loop_lvls, loop_metadata, depth + 1)
             loop_meta = loop_metadata[index_to_remove]
             new_loop = smpl.ForLoop(index_to_remove, smpl.Literal(loop_meta[0]), smpl.Literal(loop_meta[1]), smpl.Literal(loop_meta[2]), smpl.Block(tuple(loop_body)))
@@ -124,15 +152,32 @@ def codegen(dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]
         else:
             internals = list(internal_nodes[scc_node])
             assert len(internals) == 1, "acyclic scc should have 1 internal"
-            stmt = internals[0].stmt
+            stmt: smpl.Store = internals[0].stmt
+            already_done.append(internals[0])
+            # print(stmt)
 
-    
-        # edges = []
-        # internal = []
-        # for base_node in group:
-        #     internal.append(base_node)
-        #     for (_, target) in dependency_graph[base_node]:
-
+            # find which index to vectorize
+            success = False
+            for loop_index in loop_lvls[depth:]:
+                # find if this loop index appears in the statement
+                maybe_mention = find_index_mention(stmt.indices, loop_index)
+                # print(f"mention: {maybe_mention}, loop index: {loop_index.name}")
+                if maybe_mention != None:
+                    (i, coefficient, offset) = maybe_mention
+                    new_indices = list(stmt.indices)
+                    new_indices[i] = smpl.VectorIndex(offset, loop_metadata[loop_index][1] + offset, coefficient)
+                    def rw_vectorize(node):
+                        siv = get_siv_form(node)
+                        if siv == None or siv[0] != loop_index.name:
+                            return node
+                        return smpl.VectorIndex(siv[2], loop_metadata[loop_index][1] + siv[2], siv[1])
+                    rewrite = sym.PreWalk(rw_vectorize)
+                    new_rhs = rewrite(stmt.value)
+                    output.append(smpl.Store(stmt.buffer, tuple(new_indices), new_rhs))
+                    success = True
+            if not success:
+                output.append(stmt)
+    return output
 
 def advanced_vectorization(
     dependency_graph: dict[DependencyGraphNode, set[DependencyGraphEdge]],
@@ -151,9 +196,7 @@ def advanced_vectorization(
     Returns:
         List of vectorized statements and sequential loops
     """
-    
-
-
+    return codegen(dependency_graph, loop_lvls, loop_metadata, 0)
 
 def vectorize(
     simple_lang_ir: smpl.Function,

@@ -1,8 +1,6 @@
-function prgm(A[16,16]) -> [16,16]:
-    for i in range(0,15,1)
-        for j in range(0,16,1)
-            A[i+1,j] = A[i,j] + 1
-        end
+function prgm(A[16]) -> [16]:
+    for i in range(0,16,1)
+        A[i] = 0
     end
     return A
 end

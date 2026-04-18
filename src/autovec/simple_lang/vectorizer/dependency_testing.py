@@ -95,10 +95,10 @@ class Direction(Enum):
     @staticmethod
     def from_distance(dist: int):
         if dist < 0:
-            return Direction.LT
+            return Direction.GT
         if dist == 0:
             return Direction.EQ
-        return Direction.GT
+        return Direction.LT
 
 def test_strong_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpression, loop_meta) -> list[tuple[smpl.Index, Direction]] | None:
     # check for correct form
@@ -113,6 +113,7 @@ def test_strong_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpression, 
     dist = (i_addend - j_addend) / i_coeff
     if not dist.is_integer():
         return None
+    # print(dist)
     upper_bound = loop_meta[smpl.Index(i_name)][1]
     if abs(dist) < upper_bound:
         return [(smpl.Index(i_name), Direction.from_distance(int(dist)))]
@@ -142,9 +143,9 @@ def test_weak_zero_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpressio
         lit = get_literal_value(j)
     
     if strong_tuple == None or lit == None:
-        print("not applicable:")
-        print(i)
-        print(j)
+        # print("not applicable:")
+        # print(i)
+        # print(j)
         return None # weak zero not applicable: other index is not literal
     
     (name, coeff, offset) = strong_tuple
@@ -162,6 +163,8 @@ def test_weak_zero_siv(i: smpl.SimpleLangExpression, j: smpl.SimpleLangExpressio
         possible.append((smpl.Index(name), Direction.GT))
     if match_point > 0:
         possible.append((smpl.Index(name), Direction.LT))
+    assert len(possible) > 0, "no possible?"
+    return possible
     
 
 def dependency_test(
@@ -189,7 +192,7 @@ def dependency_test(
     """
     
     deps = []
-    
+
     s1 = stmt1
     s2 = stmt2
     # ensure s1 is lexicographically before s2
@@ -221,8 +224,10 @@ def dependency_test(
         # True means the second index's instruction comes lexically AFTER the first.
         # for self cycle, the write comes after the read
         # otherwise, s1 comes before s2 which means the load comes after
-        pairs_to_check.append((s1.stmt.indices, load.indices, s1, s2))
-        pairs_to_check.append((load.indices, s1.stmt.indices, s2, s1))
+        # the last tuple component signals whether s2 is lexically before s1
+        # for s1.id == s2.id, the read comes first
+        pairs_to_check.append((s1.stmt.indices, load.indices, s1, s2, False, s1.id != s2.id))
+        pairs_to_check.append((load.indices, s1.stmt.indices, s2, s1, False, s1.id == s2.id))
     
     # self cycles were already covered by the first loop's appends
     if s1.id != s2.id:
@@ -230,15 +235,15 @@ def dependency_test(
             if s2.stmt.buffer != load.buffer:
                 continue
             # guaranteed s2 store comes lexically after the load
-            pairs_to_check.append((s2.stmt.indices, load.indices, s2, s1))
+            pairs_to_check.append((s2.stmt.indices, load.indices, s2, s1, False, False))
             # check for WAR from s1 to s2, s1 comes lexically before
-            pairs_to_check.append((load.indices, s2.stmt.indices, s1, s2))
+            pairs_to_check.append((load.indices, s2.stmt.indices, s1, s2, False, True))
 
     # WAW
     if s1.stmt.buffer == s2.stmt.buffer:
-        pairs_to_check.append((s1.stmt.indices, s2.stmt.indices, s1, s2))
+        pairs_to_check.append((s1.stmt.indices, s2.stmt.indices, s1, s2, s1.id == s2.id, True))
         if s1.id != s2.id:
-            pairs_to_check.append((s2.stmt.indices, s1.stmt.indices, s2, s1))
+            pairs_to_check.append((s2.stmt.indices, s1.stmt.indices, s2, s1, False))
 
     index_to_pos = {}
     counter = 0
@@ -255,7 +260,7 @@ def dependency_test(
                 new_vecs.append(vec_copy)
         return new_vecs
 
-    def test_dependence(indices1: list[smpl.SimpleLangExpression], indices2: list[smpl.SimpleLangExpression], node_a, node_b):
+    def test_dependence(indices1: list[smpl.SimpleLangExpression], indices2: list[smpl.SimpleLangExpression], a_equals_b):
         subscripts = [*zip(indices1, indices2)]
         # special case: all indices are ziv
         is_ziv = True
@@ -266,11 +271,11 @@ def dependency_test(
                 is_ziv = False
                 break
         if is_ziv:
-            return [DependencyGraphEdge(smpl.Index("ziv"), node_a, node_b)]
+            return "ziv"
         
-        # exactly the same but not ziv
-        # if indices1 == indices2:
-        #     return []
+        # indices 1 and 2 refer to the same access, dont create a dep
+        if a_equals_b:
+            return []
         
         vecs = [[Direction.ALL] * len(loop_lvls)]
         for (index1, index2) in subscripts:
@@ -279,23 +284,90 @@ def dependency_test(
             if maybe_dep:
                 continue # ignore ziv
             maybe_dep = test_strong_siv(index1, index2, loop_metadata)
-            # print(f"siv: {maybe_dep}")
             if maybe_dep != None:
                 vecs = merge_vector_sets(maybe_dep, vecs)
             else:
                 maybe_dep = test_weak_zero_siv(index1, index2, loop_metadata)
+                # print(f"weak zero: {maybe_dep}")
                 if maybe_dep != None:
                     vecs = merge_vector_sets(maybe_dep, vecs)
                 else:
                     # no dependency, indices can't conflict
                     return []
-            print(f"updated vecs: {vecs}")
+            # print(f"updated vecs: {vecs}")
         return vecs
             
+    def is_plausible(vec):
+        for dir in vec:
+            if dir == Direction.LT:
+                return True
+            if dir == Direction.GT:
+                return False
+        return True # all EQ
+    
+    def find_carry(vec):
+        # print(vec)
+        for i in range(len(vec)):
+            el = vec[i]
+            if el == Direction.LT:
+                return loop_lvls[i]
+        # all eq
+        return None
+    
+    def discharge_stars(prefix, vec, start_from, accum):
+        if start_from >= len(vec):
+            accum.append(prefix)
+            return
+        dir = vec[start_from]
+        if dir == Direction.ALL:
+            discharge_stars(prefix + [Direction.LT], vec, start_from + 1, accum)
+            discharge_stars(prefix + [Direction.EQ], vec, start_from + 1, accum)
+            discharge_stars(prefix + [Direction.GT], vec, start_from + 1, accum)
+        else:
+            discharge_stars(prefix + [dir], vec, start_from + 1, accum)
 
-    for (indices1, indices2, node_a, node_b) in pairs_to_check:
-        print(f"indices1: {indices1}")
-        print(f"indices2: {indices2}")
-        vecs = test_dependence(indices1, indices2, node_a, node_b)
-        print(f"vecs: {vecs}")
-    return ()
+    def find_some_index(indices1, indices2):
+        for (i, j) in [*zip(indices1, indices2)]:
+            siv = get_siv_form(i)
+            if siv != None:
+                return siv[0]
+            siv = get_siv_form(j)
+            if siv != None:
+                return siv[0]
+        return None
+    
+    def is_loop_independent(vec):
+        for dir in vec:
+            if dir != Direction.EQ:
+                return False
+        return True
+
+    deps: list[DependencyGraphEdge] = []
+    for (indices1, indices2, node_a, node_b, a_equals_b, a_before_b) in pairs_to_check:
+        # print(f"indices1: {indices1}")
+        # print(f"indices2: {indices2}")
+        vecs = test_dependence(indices1, indices2, a_equals_b)
+        if vecs == "ziv":
+            deps.append(DependencyGraphEdge(smpl.Index("ziv"), node_a, node_b))
+            continue
+
+        for vec in vecs:
+            concrete_vecs = []
+            discharge_stars([], vec, 0, concrete_vecs)
+            # print(concrete_vecs)
+            for vec_ in concrete_vecs:
+                # print(vec_)
+                if (not a_before_b or node_a == node_b) and is_loop_independent(vec_):
+                    continue
+                # print(f"{vec_} {a_before_b}")
+                if is_plausible(vec_):
+                    carry = find_carry(vec_)
+                    if carry == None:
+                        c = find_some_index(indices1, indices2)
+                        if c == None:
+                            c = "ziv"
+                        carry = smpl.Index(c)
+                    # print(carry.name)
+                    deps.append(DependencyGraphEdge(carry, node_a, node_b))
+
+    return tuple(deps)
